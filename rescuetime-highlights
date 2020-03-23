@@ -1,0 +1,196 @@
+#!/usr/bin/env perl
+use strict; use warnings;
+use feature 'say';
+use utf8;
+use Encode;
+use HTTP::Tiny;
+use JSON::XS;
+use Date::Manip;
+use DateTime::Format::Natural;
+use WebService::Slack::WebApi;
+
+my $ACCESSTOKEN     = $ENV{SLACK_ACCESSTOKEN}       || die 'SLACK_ACCESSTOKEN unset';
+my $apiKey          = $ENV{RESCUETIME_API_KEY}      || die 'RESCUETIME_API_KEY unset';
+my $slackChannel    = $ENV{SLACK_STANDUP_CHANNEL}   || die 'SLACK_STANDUP_CHANNEL unset';
+
+my $slack = WebService::Slack::WebApi->new(token => $ACCESSTOKEN)
+    or die $!;
+
+my $parser = DateTime::Format::Natural->new;
+my $dt = $parser->parse_datetime("@ARGV" || 'today');
+die $parser->error
+    if (!$parser->success);
+
+my $http    = HTTP::Tiny->new(timeout => 5);
+
+my $highlights_url = sprintf(
+    "https://www.rescuetime.com/anapi/highlights_feed?key=${apiKey}&format=json"
+);
+
+my $response = $http->get($highlights_url);
+
+if (not $response->{success}) {
+    _share_to_slack('sandbox-chizcw', ":warning: Failed to GET: $highlights_url");
+    die "Failed";
+}
+
+my $all_highlights = JSON::XS::decode_json($response->{content})
+    or die $!;
+
+my $filtered_highlights = [
+    grep { $_->{date} eq $dt->ymd }
+        sort {$a->{id} <=> $b->{id}} @{$all_highlights}
+];
+
+my $output = sprintf(
+    ":calendar: *Tasks Logged on %s, %s %s*",
+    $dt->day_name,
+    $dt->month_name,
+    $dt->day,
+);
+
+$output .= _process_highlights($filtered_highlights);
+
+# make the output 'http-message friendly
+# http://www.perlmonks.org/bare/?node_id=806426
+# i.e. prevent "HTTP::Message content must be bytes"
+$output = encode('UTF-8', $output);
+
+# debug and exit
+if ($ENV{DEBUG_RT_HIGHLIGHTS}) {
+    say $output;
+    _share_to_slack('sandbox-chizcw', $output);
+    exit;
+}
+
+# send to the team
+_share_to_slack($slackChannel, $output);
+
+sub _get_slack_channel_or_group {
+    my $name = shift or die "name required";
+    my $dest = _get_slack_channels()->{ $name } || _get_slack_groups()->{ $name };
+    die "unknown group, or channel" unless defined $dest;
+    return $dest;
+}
+
+sub _get_slack_groups {
+    my $slack_groups;
+    my $groups = $slack->groups->list;
+    my $group_data;
+    map { $group_data->{ $_->{name} } = $_ }  @{ $groups->{groups}};
+
+    return $group_data;
+}
+
+sub _get_slack_channels {
+    my $slack_channels;
+    my $channels = $slack->channels->list;
+    my $channel_data;
+    map { $channel_data->{ $_->{name} } = $_ }  @{ $channels->{channels}};
+
+    return $channel_data;
+}
+
+
+sub _get_slack_channel {
+    my $channel_name = shift;
+    my $channel = _get_slack_channels()->{ $channel_name };
+    die "unknown channel" unless defined $channel;
+    return $channel;
+}
+
+sub _get_slack_group {
+    my $group_name = shift;
+    my $group = _get_slack_groups()->{ $group_name };
+    die "unknown group" unless defined $group;
+    return $group;
+}
+
+sub _share_to_slack {
+    my $channel_name = shift || die 'channel name required';
+    my $message = shift || die 'message required';
+
+    my $channel = _get_slack_channel_or_group($channel_name);
+    # posting message to specified channel and getting message description
+    my $posted_message = $slack->chat->post_message(
+        channel  => $channel->{id}, # required
+        text     => $message,       # required (not required if 'attachments' argument exists)
+        username => 'chizcw',       # optional
+        as_user  => 1,
+        # other optional parameters...
+    );
+}
+
+sub _process_highlights {
+    my $filtered_highlights = shift;
+    my $categorised_highlights;
+    my $upcoming_highlights;
+    my $highlights;
+
+    die "need some highlights" unless defined $filtered_highlights;
+
+    if (not defined $filtered_highlights || not @{$filtered_highlights}) {
+        return "\n • _No Activities Recorded_";
+    }
+
+    foreach my $highlight (@{$filtered_highlights}) {
+        # strip trailing whitespace
+        $highlight->{description} =~ s{\s+$}{};
+
+        if ($highlight->{description} =~ s{\s+\(!\)$}{}) {
+            # unplanned
+            push @{$categorised_highlights->{Unplanned}}, $highlight;
+        }
+        elsif ($highlight->{description} =~ s{\s+\(y\)$}{}) {
+            # planned
+            push @{$categorised_highlights->{Planned}}, $highlight;
+        }
+        elsif ($highlight->{description} =~ s{\s+\(fire\)$}{}) {
+            # planned
+            push @{$categorised_highlights->{Firefighting}}, $highlight;
+        }
+        elsif ($highlight->{description} =~ s{\s+\(p\)$}{}) {
+            # planning to do the next working day
+            push @{$upcoming_highlights->{TODO}}, $highlight;
+        }
+        else {
+            # uncategorised
+            push @{$categorised_highlights->{Uncategorised}}, $highlight;
+        }
+    }
+
+    my $added_activity;
+
+    my %activity_icon_for = (
+        'Planned'       => 'thumbsup',
+        'Unplanned'     => 'skull_and_crossbones',
+        'Firefighting'  => 'fire',
+        'Uncategorised' => 'grey_question',
+    );
+
+    # recorded activities for the day
+    foreach my $category (qw/Planned Firefighting Unplanned Uncategorised/) {
+        if (exists $categorised_highlights->{$category}) {
+            $added_activity++;
+            my $icon = (exists $activity_icon_for{ $category }) ? ":$activity_icon_for{ $category }:" : '';
+            $highlights .= "\n \n${icon} _${category} tasks logged:_\n";
+            map { $highlights .= "\n • $_->{description}" } @{$categorised_highlights->{$category}};
+        }
+    }
+
+    if (not $added_activity) {
+        $highlights .= "\n\n:warning: No activities logged for the day";
+    }
+
+    # planned future work
+    foreach my $category (qw/TODO/) {
+        if (exists $upcoming_highlights->{$category}) {
+            $highlights .= "\n \n:crystal_ball::crystal_ball::crystal_ball:\n*Intentions For Next Working Day*";
+            map { $highlights .= "\n• $_->{description}" } @{$upcoming_highlights->{$category}};
+        }
+    }
+
+    return $highlights;
+}
+
+# vim:syntax=perl:ts=4:sts=4:sw=4:et:

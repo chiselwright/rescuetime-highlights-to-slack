@@ -29,3 +29,13 @@ This assumes you have:
 ```
   55  21  *   *  mon-fri   . $HOME/.shellrc.d/_agnostic/zoopla-standup.exports; $HOME/perl5/perlbrew/perls/perl-5.30.2/bin/perl $HOME/development/rescuetime-highlights-to-slack/rescuetime-highlights today >>$HOME/cron.out 2>&1
 ```
+
+## Magic Tags
+
+The process is intentionally simple / basic.
+End a highlight with one of the following to categorise it:
+
+* `(y)` - planned
+* `(!)` - unplanned
+* `(fire)` - firefighting/support (in #zoopla-infrastructure)
+* `(p)` - planned task for the next working day

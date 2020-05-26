@@ -137,24 +137,34 @@ sub _process_highlights {
         # strip trailing whitespace
         $highlight->{description} =~ s{\s+$}{};
 
+        # unplanned (!)
         if ($highlight->{description} =~ s{\s+\(!\)$}{}) {
-            # unplanned
             push @{$categorised_highlights->{Unplanned}}, $highlight;
         }
+
+        # planned task (y)
         elsif ($highlight->{description} =~ s{\s+\(y\)$}{}) {
-            # planned
             push @{$categorised_highlights->{Planned}}, $highlight;
         }
+
+        # firefighting (fire)
         elsif ($highlight->{description} =~ s{\s+\(fire\)$}{}) {
-            # planned
             push @{$categorised_highlights->{Firefighting}}, $highlight;
         }
+
+        # support (s)
+        elsif ($highlight->{description} =~ s{\s+\(s\)$}{}) {
+            push @{$categorised_highlights->{Support}}, $highlight;
+        }
+
+        # future plan (p)
         elsif ($highlight->{description} =~ s{\s+\(p\)$}{}) {
             # planning to do the next working day
             push @{$upcoming_highlights->{TODO}}, $highlight;
         }
+
+        # uncategorised
         else {
-            # uncategorised
             push @{$categorised_highlights->{Uncategorised}}, $highlight;
         }
     }
@@ -165,11 +175,12 @@ sub _process_highlights {
         'Planned'       => 'thumbsup',
         'Unplanned'     => 'skull_and_crossbones',
         'Firefighting'  => 'fire',
+        'Support'       => 'hammer_and_wrench',
         'Uncategorised' => 'grey_question',
     );
 
     # recorded activities for the day
-    foreach my $category (qw/Planned Firefighting Unplanned Uncategorised/) {
+    foreach my $category (qw/Planned Support Firefighting Unplanned Uncategorised/) {
         if (exists $categorised_highlights->{$category}) {
             $added_activity++;
             my $icon = (exists $activity_icon_for{ $category }) ? ":$activity_icon_for{ $category }:" : '';

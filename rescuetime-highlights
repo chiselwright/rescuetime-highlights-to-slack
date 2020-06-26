@@ -142,6 +142,11 @@ sub _process_highlights {
             push @{$categorised_highlights->{Unplanned}}, $highlight;
         }
 
+        # meeting (m)
+        elsif ($highlight->{description} =~ s{\s+\(m\)$}{}) {
+            push @{$categorised_highlights->{Meeting}}, $highlight;
+        }
+
         # planned task (y)
         elsif ($highlight->{description} =~ s{\s+\(y\)$}{}) {
             push @{$categorised_highlights->{Planned}}, $highlight;
@@ -177,10 +182,11 @@ sub _process_highlights {
         'Firefighting'  => 'fire',
         'Support'       => 'hammer_and_wrench',
         'Uncategorised' => 'grey_question',
+        'Meeting'       => 'calendar',
     );
 
     # recorded activities for the day
-    foreach my $category (qw/Planned Support Firefighting Unplanned Uncategorised/) {
+    foreach my $category (qw/Planned Support Meeting Firefighting Unplanned Uncategorised/) {
         if (exists $categorised_highlights->{$category}) {
             $added_activity++;
             my $icon = (exists $activity_icon_for{ $category }) ? ":$activity_icon_for{ $category }:" : '';
